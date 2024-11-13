@@ -8,11 +8,11 @@ Electric load forecasting serves as the foundation for various power system anal
 
 ## Main Results
 
-![image](./figs/results_GEFCom2012.png)
+![Results on GEFCom2012](./figs/results_GEFCom2012.png)
 
 
 
-![image](./figs/results_ISONE.png)
+![Results on ISONE](./figs/results_ISONE.png)
 
 
 ## Get Started
