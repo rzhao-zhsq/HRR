@@ -1,6 +1,6 @@
 # HR$^2$:  A Novel Hierarchical Residual Regression Framework for Load Forecasting
 
-
+Note this is not a cleaned repo.
 
 ## Abstract
 
