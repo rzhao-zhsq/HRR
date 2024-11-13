@@ -15,21 +15,9 @@ import torch
 from torch import nn, Tensor
 import yaml
 from torch.utils.tensorboard import SummaryWriter
-import wandb
 
 
-def make_wandb(model_dir, cfg):
-    if is_main_process():
-        wandb.login(key='provide your key here')
-        run = wandb.init(project='TwoStreamSLT', config=cfg, reinit=True)
-        wandb.run.name = '/'.join(model_dir.split('/')[-2:])
-        wandb.run.save()
-        return run
-    else:
-        return None
-
-
-def neq_load_customized(model, pretrained_dict, verbose=False):
+def neq_load_customized(model, pretrained_dict, verbose=False, copy=False):
     """
     load pre-trained model in a not-equal way,
     when new model has been partially modified
@@ -42,7 +30,10 @@ def neq_load_customized(model, pretrained_dict, verbose=False):
         print('Weights not used from pretrained file:')
     for k, v in pretrained_dict.items():
         if k in model_dict and model_dict[k].shape == v.shape:
-            tmp[k] = v
+            if copy:
+                tmp[k] = v.copy()
+            else:
+                tmp[k] = v
         else:
             if verbose:
                 print(k)

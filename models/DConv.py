@@ -7,6 +7,7 @@ from models.layers.PatchRevIN import RevIN
 from utils.misc import neq_load_customized, freeze_params
 from models.layers.VAELayers import GaussianNet
 
+
 class Model(nn.Module):
     """
     Decomposition-Linear
@@ -39,7 +40,7 @@ class Model(nn.Module):
             ),
             nn.ReLU(),
             nn.Dropout(configs.dropout),
-            nn.AvgPool1d(kernel_size=3, stride=1, padding=1, ceil_mode=False, count_include_pad=False),
+            # nn.AvgPool1d(kernel_size=3, stride=1, padding=1, ceil_mode=False, count_include_pad=False),
             # nn.MaxPool1d(kernel_size=3, padding=1, stride=1, ceil_mode=False,),
         )
 
@@ -100,7 +101,7 @@ class Model(nn.Module):
         x = self.predict_head(x)
         trend = self.predict_head(trend)
         x = x + trend
-        x = x.transpose(1,2)
+        x = x.transpose(1, 2)
 
         x = self.revin_layer(x, 'denorm') if self.revin else x
 

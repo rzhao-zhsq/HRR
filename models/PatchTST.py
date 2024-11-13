@@ -14,7 +14,7 @@ class Model(nn.Module):
     def __init__(
             self, cfg,
             fc_dropout=0.3, head_dropout = 0.0, patch_len=16, stride=8, padding_patch="end",
-            revin=1, affine=0, subtract_last=0,decomposition=0,kernel_size=25,individual=0,
+            revin=1, affine=1, subtract_last=0,decomposition=0,kernel_size=25,individual=0,
             max_seq_len: Optional[int] = 1024, d_k: Optional[int] = None, d_v: Optional[int] = None,
             norm: str = 'BatchNorm', attn_dropout: float = 0., act: str = "gelu",
             key_padding_mask: bool = 'auto', padding_var: Optional[int] = None, attn_mask: Optional[Tensor] = None,
@@ -107,6 +107,20 @@ class Model(nn.Module):
 
         self.loginfo = self._set_loginfo_(cfg)
 
+    def _set_loginfo_(self, cfg):
+
+        return f"_sl_{cfg.seq_len}_ll_{cfg.label_len}_pl_{cfg.pred_len}" \
+               f"-freq_{cfg.freq}" \
+               f"-freq_{cfg.revin}" \
+               f"_embed_{cfg.embed}_kernel_{cfg.kernel_size}_encin_{cfg.enc_in}" \
+               f"_el_{cfg.e_layers}_dmodel_{cfg.d_model}_nhead_{cfg.n_heads}_dff_{cfg.d_ff}" \
+               f"_patchlen_{cfg.patch_len}_stride_{cfg.stride}" \
+               f"_dropout_{cfg.dropout}_fcdropout_{cfg.fc_dropout}" \
+               f"_decompos_{cfg.decomposition}_individual_{cfg.individual}"
+
+    def get_loginfo(self):
+        return self.loginfo
+
     # def forward(self, x):  # x: [Batch, Input length, Channel]
     def forward(self, target_x, **kwargs,):
         x = target_x
@@ -127,17 +141,4 @@ class Model(nn.Module):
             "output": x,
         }
 
-    def _set_loginfo_(self, cfg):
-
-        return f"_sl_{cfg.seq_len}_ll_{cfg.label_len}_pl_{cfg.pred_len}" \
-               f"-freq_{cfg.freq}" \
-               f"-freq_{cfg.revin}" \
-               f"_embed_{cfg.embed}_kernel_{cfg.kernel_size}_encin_{cfg.enc_in}" \
-               f"_el_{cfg.e_layers}_dmodel_{cfg.d_model}_nhead_{cfg.n_heads}_dff_{cfg.d_ff}" \
-               f"_patchlen_{cfg.patch_len}_stride_{cfg.stride}" \
-               f"_dropout_{cfg.dropout}_fcdropout_{cfg.fc_dropout}" \
-               f"_decompos_{cfg.decomposition}_individual_{cfg.individual}"
-
-    def get_loginfo(self):
-        return self.loginfo
 

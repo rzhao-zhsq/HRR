@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.layers.Attention import FullAttention, AttentionLayer
-from models.layers.Embed import DataEmbedding
+from models.layers.Embed import DataEmbedding, ValueEmbedding
 from models.layers.Transformer_EncDec import (
     EncoderLayer,
     DecoderLayer,
@@ -59,15 +59,19 @@ class Model(nn.Module):
         self.decoder = Decoder(
             layers=[
                 DecoderLayer(
-                    # self-attn
+                    # self-attn, w/o triangular causal mask for nat variant
                     AttentionLayer(
-                        FullAttention(True, configs.factor, attention_dropout=configs.dropout, output_attention=False),
+                        FullAttention(
+                            mask_flag=False, attention_dropout=configs.dropout, output_attention=False
+                        ),
                         configs.d_model,
                         configs.n_heads
                     ),
-                    # cross-attn
+                    # cross-attn,
                     AttentionLayer(
-                        FullAttention(False, configs.factor, attention_dropout=configs.dropout, output_attention=False),
+                        FullAttention(
+                            mask_flag=False, attention_dropout=configs.dropout, output_attention=False
+                        ),
                         configs.d_model,
                         configs.n_heads
                     ),
@@ -80,21 +84,19 @@ class Model(nn.Module):
             ],
             norm_layer=torch.nn.LayerNorm(configs.d_model),
         )
-
         if configs.conv_head:
             from models.layers.Embed import ValueEmbedding
             self.predict_head = ValueEmbedding(configs.d_model, configs.c_out)
         else:
             self.predict_head = nn.Linear(configs.d_model, configs.c_out, bias=True)
-
         self.loginfo = self._set_loginfo_(configs)
 
     def _set_loginfo_(self, cfg):
 
         return f"_s-{cfg.seq_len}_l-{cfg.label_len}_p-{cfg.pred_len}" \
-               f"_rgl-{cfg.encoder_regular}" \
-               f"_embed-{cfg.embed}{'-shared' if cfg.embed_shared else ''}" \
                f"-f-{cfg.freq}" \
+               f"_embed-{cfg.embed}{'-shrd' if cfg.embed_shared else ''}" \
+               f"{'_rgl' if cfg.encoder_regular else ''}" \
                f"_ec-{cfg.enc_in}_dc-{cfg.dec_in}_oc-{cfg.c_out}" \
                f"_el-{cfg.e_layers}_dl-{cfg.d_layers}_d-{cfg.d_model}_nh-{cfg.n_heads}_ff-{cfg.d_ff}" \
                f"_drop-{cfg.dropout}"
@@ -102,15 +104,18 @@ class Model(nn.Module):
     def get_loginfo(self):
         return self.loginfo
 
-    # TODO(rzhao): auto-regressive decode
-    def decode(self):
-        return
-
     def forward(
             self,
-            prev_x, prev_y, prev_mark,
-            target_x, target_y, target_mark,
-            enc_self_mask=None, dec_self_mask=None, dec_enc_mask=None, **kwargs,
+            prev_x,
+            prev_y,
+            prev_mark,
+            target_x,
+            target_y,
+            target_mark,
+            enc_self_mask=None,
+            dec_self_mask=None,
+            dec_enc_mask=None,
+            **kwargs,
     ):
         # prepare decoder input
         # dec_inp = torch.zeros_like(target_y)
@@ -122,21 +127,29 @@ class Model(nn.Module):
         #     z = z.permute(0, 2, 1)
         #     z = self.revin_layer(z, 'norm')
         #     z = z.permute(0, 2, 1)
-        # prev_x = torch.cat([prev_x, prev_y], dim=-1)
+
+        """
+        B, T_target, D = target_x.shape
+        mask_shape = [B, 1, T_target, T_target]
+        # mask = torch.triu(torch.ones(mask_shape, dtype=torch.bool), diagonal=1+T_target).to(prev_x.device)
+        cross_mask = torch.zeros(mask_shape)
+        stride = 10
+        for i in range(T_target//stride):
+            inx = i * stride
+            cross_mask[..., inx:inx + stride, inx:inx + stride] = False
+        cross_mask[..., T_target // stride * stride:, :] = False
+        """
+
         enc_embed = self.enc_embedding.forward(prev_x, prev_mark)
-        enc_out_dict = self.encoder.forward(enc_embed, attn_mask=enc_self_mask)
+        enc_out_dict = self.encoder.forward(enc_embed)
         dec_embed = self.dec_embedding(target_x, target_mark)
-        dec_out_dict = self.decoder(
-            dec_embed, enc_out_dict['output'],
-            x_mask=dec_self_mask, cross_mask=dec_enc_mask
-        )
+        dec_out_dict = self.decoder(dec_embed, enc_out_dict['output'])
         output = self.predict_head(dec_out_dict['output'])
-        output = output[:, -self.pred_len:, :]
         output_dict = {
-            "output": output,
-            "decoder_output": dec_out_dict['output'],
+            "output": output[:, -self.pred_len:, :],
             "encoder_output": enc_out_dict['output'],
             "encoder_attns": enc_out_dict['attns'],
+            "decoder_output": dec_out_dict['output'],
         }
         if self.encoder_regular > 0:
             enc_mse_loss = F.mse_loss(self.predict_head(enc_out_dict['output']), prev_y) * self.encoder_regular

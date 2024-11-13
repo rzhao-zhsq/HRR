@@ -53,7 +53,7 @@ class Model(nn.Module):
         }
 
     def _set_loginfo_(self, cfg):
-        return f"_sl_{cfg.seq_len}_ll_{cfg.label_len}_pl_{cfg.pred_len}" \
+        return f"_s-{cfg.seq_len}_l-{cfg.label_len}_p-{cfg.pred_len}" \
                f"-freq_{cfg.freq}_encin_{cfg.enc_in}_kernel_{cfg.moving_avg}_individual_{cfg.individual}"
 
     def get_loginfo(self):

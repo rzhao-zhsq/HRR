@@ -27,6 +27,23 @@ ScalerSelector = {
 }
 
 
+def attack(y_train, k=0.7, a=0.0, b=0.0, increase=True, noise_func="uniform"):
+    """
+    pick picking k% of the observed load data in the training period and then increased/decreasing them by p%.
+    """
+    idx = np.random.binomial(1, k, size=y_train.size)
+    if noise_func == "uniform":
+        p = np.random.uniform(low=a, high=b, size=y_train.size)
+    else:
+        p = np.random.randn(y_train.size)
+        p = p * b + a
+    if increase:
+        attacked_data = y_train + y_train * idx * p
+    else:
+        attacked_data = y_train - y_train * idx * p
+    return attacked_data
+
+
 class Dataset_ETT_hour(Dataset):
     def __init__(self, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
@@ -561,8 +578,7 @@ class Dataset_Gefcom(Dataset):
             self, root_path, flag='train', size=None,
             features='S', data_path='ETTh1.csv',
             target='OT', scale=True, inverse=False, timeenc=0, freq='h', cols=None,
-            scaler="std",
-            **kwargs
+            scaler="std", **kwargs
     ):
         # size [seq_len, label_len, pred_len]
         # info
@@ -584,7 +600,7 @@ class Dataset_Gefcom(Dataset):
         self.inverse = inverse
         self.timeenc = timeenc
         self.freq = freq
-        self.cols = cols
+        self.cols = cols if isinstance(cols, list) else [cols]
         self.root_path = root_path
         self.data_path = data_path
         self.scaler = ScalerSelector.get(scaler, ScalerSelector['std'])
@@ -592,6 +608,12 @@ class Dataset_Gefcom(Dataset):
         self.lag = kwargs.get('lag', 0)
         self.zone = kwargs.get('zone', 'CT')
         self.real_time = kwargs.get('real_time', False)
+        self.attack_rate = kwargs.get('attack_rate', 0.0)
+        self.attack_form = kwargs.get('attack_form', None)
+        self.attack_increase = kwargs.get('attack_increase', False)
+        self.dist_param_a = kwargs.get('dist_param_a', 1)
+        self.dist_param_b = kwargs.get('dist_param_b', 0.0)
+
         # if self.lag > 0:
         #     assert self.features == "S"
         self.__read_data__()
@@ -608,7 +630,6 @@ class Dataset_Gefcom(Dataset):
         df_raw.rename(columns={"ts": "date"}, inplace=True)
         # df_raw = df_raw.groupby('zone').get_group(self.zone)
         df_raw = df_raw.loc[df_raw['zone'] == self.zone].drop(columns=['zone']).sort_values(by='date')
-
 
         df_raw['date'] = pd.to_datetime(df_raw['date'])
         train_start, train_end = pd.Timestamp(2013, 1, 1), pd.Timestamp(2014, 7, 1)
@@ -774,7 +795,7 @@ class Dataset_Gefcom(Dataset):
         return inversed_data
 
 
-class Dataset_Gefcom_Reg(Dataset_Gefcom):
+class Dataset_Gefcom2017_Reg(Dataset_Gefcom):
     def __init__(
             self, root_path, flag='train', size=None,
             features='S', data_path='ETTh1.csv', target='OT', scale=True,
@@ -792,33 +813,17 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
 
         df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
         # all_data = df_raw[['ts', 'zone', 'demand', 'drybulb', 'dewpnt', 'holiday_name', 'holiday']]
-        df_raw = df_raw[['ts', 'zone', 'demand', 'drybulb', 'dewpnt', ]]
+
+        # df_raw = df_raw[['ts', 'zone', 'demand', 'drybulb', 'dewpnt', ]] # for drybulb and dewpnt
+
+        df_raw = df_raw[['ts', 'zone', 'demand', 'drybulb']] # for single drybulb
+
         df_raw.rename(columns={"ts": "date"}, inplace=True)
         # df_raw = df_raw.groupby('zone').get_group(self.zone)
         df_raw = df_raw.loc[df_raw['zone'] == self.zone].drop(columns=['zone']).sort_values(by='date')
-
         df_raw['date'] = pd.to_datetime(df_raw['date'])
-        train_start, train_end = pd.Timestamp(2013, 1, 1), pd.Timestamp(2014, 7, 1)
-        valid_end, test_end = pd.Timestamp(2015, 1, 1), pd.Timestamp(2015, 12, 31)
-        train_data = df_raw.loc[
-            # df_raw['date'] < pd.Timestamp(2016, 7, 1)
-            df_raw['date'].apply(lambda x: train_start <= x < train_end)
-        ]
-        valid_data = df_raw.loc[
-            df_raw['date'].apply(lambda x: train_end <= x < valid_end)
-        ]
-        test_data = df_raw.loc[
-            # pd.Timestamp(2016, 10, 1) <= df_raw['date']
-            df_raw['date'].apply(lambda x: valid_end <= x < test_end)
-        ]
-        train_start = sum(df_raw['date'] < train_start)
-        valid_start = sum(df_raw['date'] < train_end)
-        test_start = sum(df_raw['date'] < valid_end)
 
-        '''
-        df_raw.columns: ['date', ...(other features), target feature]
-        '''
-        # cols = list(df_raw.columns);
+        # to make the data in the form of ['date', ...(other features), target feature]
         if self.cols:
             cols = self.cols.copy()
             cols.remove(self.target)
@@ -827,6 +832,43 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
             cols.remove(self.target)
             cols.remove('date')
         df_raw = df_raw[['date'] + cols + [self.target]]
+
+        train_start_time, train_end_time = pd.Timestamp(2013, 1, 1), pd.Timestamp(2015, 1, 1)
+        valid_end_time, test_end_time = pd.Timestamp(2015, 1, 1), pd.Timestamp(2016, 1, 1)
+
+        if self.attack_rate > 0 and self.set_type == "train":
+            df_raw_cp = df_raw.copy()
+            target = df_raw_cp.loc[
+                df_raw_cp['date'].apply(lambda x: train_start_time <= x < train_end_time),
+                self.target
+            ].values
+            target = attack(
+                target,
+                k=self.attack_rate,
+                a=self.dist_param_a,
+                b=self.dist_param_b,
+                increase=self.attack_increase,
+                noise_func=self.attack_form,
+            )
+            df_raw_cp.loc[
+                df_raw_cp['date'].apply(lambda x: train_start_time <= x < train_end_time),
+                self.target
+            ] = target
+            df_raw = df_raw_cp
+
+        train_data = df_raw.loc[
+            df_raw['date'].apply(lambda x: train_start_time <= x < train_end_time)
+        ]
+        valid_data = df_raw.loc[
+            df_raw['date'].apply(lambda x: train_end_time <= x < valid_end_time)
+        ]
+        test_data = df_raw.loc[
+            # pd.Timestamp(2016, 10, 1) <= df_raw['date']
+            df_raw['date'].apply(lambda x: valid_end_time <= x < test_end_time)
+        ]
+        train_start = sum(df_raw['date'] < train_start_time)
+        valid_start = sum(df_raw['date'] < train_end_time)
+        test_start = sum(df_raw['date'] < valid_end_time)
 
         num_train, num_valid, num_test = len(train_data), len(valid_data), len(test_data)
         data_split = {
@@ -843,7 +885,7 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
                 "end": test_start + num_test
             },
         }
-        border1, border2 = data_split[self.set_type]['start'], data_split[self.set_type]['end']
+
         if self.real_time:
             if self.set_type == 'train':
                 pred_start = train_start
@@ -863,11 +905,15 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
             raise ValueError
 
         if self.scale:
-            # train_data = df_data[border1s[0]:border2s[0]]
+            # TODO(rzhao): scale the non target with the whole data, and scale the target dim with train data.
+            whole_data = df_data[data_split['train']['start']:data_split['test']['end']]
+            self.scaler.fit(whole_data.values)
+            scaled_whole_data = self.scaler.transform(df_data.values.copy())
+
             train_data = df_data[data_split['train']['start']:data_split['train']['end']]
             self.scaler.fit(train_data.values)
-            data = self.scaler.transform(df_data.values)
-            # TODO(rzhao): inverse_transform the prediction.
+            data = self.scaler.transform(df_data.values.copy())
+            data[:, -1] = scaled_whole_data[:, -1]
         else:
             data = df_data.values
 
@@ -875,6 +921,7 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
         # df_stamp['date'] = pd.to_datetime(df_stamp.date)
         # data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
 
+        border1, border2 = data_split[self.set_type]['start'], data_split[self.set_type]['end']
         df_stamp = df_raw[['date']][border1:border2]
         df_stamp['date'] = pd.to_datetime(df_stamp.date)
         if self.timeenc == 0:
@@ -888,13 +935,14 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
             data_stamp = data_stamp.transpose(1, 0)
         else:
             raise ValueError
+        self.data_stamp = data_stamp
 
         self.data_x = data[border1:border2, :-1]
         if self.inverse:
             self.data_y = df_data.values[border1:border2, -1:]
         else:
             self.data_y = data[border1:border2, -1:]
-        self.data_stamp = data_stamp
+
 
     def __getitem__(self, index):
         if self.real_time:
@@ -936,8 +984,8 @@ class Dataset_Gefcom_Reg(Dataset_Gefcom):
         }
 
 
-# TODO(rzhao).
-class Dataset_Gefcom_Reg_Lag(Dataset_Gefcom_Reg):
+"""
+class Dataset_Gefcom_Reg_Lag(Dataset_Gefcom2017_Reg):
     def __init__(
             self, root_path, flag='train', size=None, features='S', data_path='ETTh1.csv', target='OT', scale=True,
             inverse=False, timeenc=0, freq='h', cols=None, **kwargs
@@ -986,3 +1034,187 @@ class Dataset_Gefcom_Reg_Lag(Dataset_Gefcom_Reg):
             "target_y": target_y,
             "target_mark": target_mark,
         }
+"""
+
+class Dataset_Gefcom2012_Reg(Dataset_Gefcom):
+    def __init__(
+            self, root_path, flag='train', size=None,
+            features='S', data_path='ETTh1.csv', target='OT', scale=True,
+            inverse=False, timeenc=0, freq='h', cols=None,
+            **kwargs
+    ):
+        # size [seq_len, label_len, pred_len]
+        # info
+        super().__init__(
+            root_path, flag, size, features, data_path, target,
+            scale, inverse, timeenc, freq, cols, **kwargs
+        )
+
+    def __read_data__(self):
+
+        df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
+        # all_data = df_raw[['ts', 'zone', 'demand', 'drybulb', 'dewpnt', 'holiday_name', 'holiday']]
+        # df_raw = df_raw[['ts', 'zone', 'demand', 'drybulb', 'dewpnt', ]]
+        df_raw.rename(columns={"ts": "date", "load": "demand"}, inplace=True)
+        # df_raw = df_raw.groupby('zone').get_group(self.zone)
+        df_raw = df_raw.loc[df_raw['zone'] == int(self.zone)].drop(columns=['zone']).sort_values(by='date')
+
+        df_raw['date'] = pd.to_datetime(df_raw['date'])
+        train_start_time, train_end_time = pd.Timestamp(2005, 1, 1), pd.Timestamp(2007, 1, 1)
+        valid_end_time, test_end_time = pd.Timestamp(2007, 1, 1), pd.Timestamp(2008, 1, 1)
+        if self.attack_rate > 0 and self.set_type == "train":
+            df_raw_cp = df_raw.copy()
+            target = df_raw_cp.loc[
+                df_raw_cp['date'].apply(lambda x: train_start_time <= x < train_end_time),
+                self.target
+            ].values
+            target = attack(
+                target,
+                k=self.attack_rate,
+                a=self.dist_param_a,
+                b=self.dist_param_b,
+                increase=self.attack_increase,
+                noise_func=self.attack_form,
+            )
+            df_raw_cp.loc[
+                df_raw_cp['date'].apply(lambda x: train_start_time <= x < train_end_time),
+                self.target
+            ] = target
+            df_raw = df_raw_cp
+        train_data = df_raw.loc[
+            # df_raw['date'] < pd.Timestamp(2016, 7, 1)
+            df_raw['date'].apply(lambda x: train_start_time <= x < train_end_time)
+        ]
+        valid_data = df_raw.loc[
+            df_raw['date'].apply(lambda x: train_end_time <= x < valid_end_time)
+        ]
+        test_data = df_raw.loc[
+            # pd.Timestamp(2016, 10, 1) <= df_raw['date']
+            df_raw['date'].apply(lambda x: valid_end_time <= x < test_end_time)
+        ]
+        train_start = sum(df_raw['date'] < train_start_time)
+        valid_start = sum(df_raw['date'] < train_end_time)
+        test_start = sum(df_raw['date'] < valid_end_time)
+
+        # to make the data in the form of ['date', ...(other features), target feature]
+        if self.cols:
+            cols = self.cols.copy()
+            # cols.remove(self.target)
+        else:
+            cols = list(df_raw.columns)
+            cols.remove(self.target)
+            cols.remove('date')
+        df_raw = df_raw[['date'] + cols + [self.target]]
+
+        num_train, num_valid, num_test = len(train_data), len(valid_data), len(test_data)
+        data_split = {
+            "train": {
+                "start": train_start - int(self.real_time) * (self.seq_len + self.lag),
+                "end": train_start + num_train
+            },
+            "valid": {
+                "start": valid_start - self.seq_len - self.lag,
+                "end": valid_start + num_valid
+            },
+            "test": {
+                "start": test_start - self.seq_len - self.lag,
+                "end": test_start + num_test
+            },
+        }
+
+        if self.real_time:
+            if self.set_type == 'train':
+                pred_start = train_start
+            elif self.set_type == 'valid':
+                pred_start = valid_start
+            else:
+                pred_start = test_start
+            pred_start -= data_split[self.set_type]['start']
+            self.set_pred_start(pred_start=pred_start)
+
+        if self.features == 'M' or self.features == 'MS':
+            cols_data = df_raw.columns[1:]
+            df_data = df_raw[cols_data]
+        elif self.features == 'S':
+            df_data = df_raw[[self.target]]
+        else:
+            raise ValueError
+
+        if self.scale:
+            # TODO(rzhao): scale the non target with the whole data, and scale the target dim with train data.
+            whole_data = df_data[data_split['train']['start']:data_split['test']['end']]
+            self.scaler.fit(whole_data.values)
+            scaled_whole_data = self.scaler.transform(df_data.values.copy())
+
+            train_data = df_data[data_split['train']['start']:data_split['train']['end']]
+            self.scaler.fit(train_data.values)
+            data = self.scaler.transform(df_data.values.copy())
+            data[:, -1] = scaled_whole_data[:, -1]
+        else:
+            data = df_data.values
+
+        # df_stamp = df_raw[['date']][border1:border2]
+        # df_stamp['date'] = pd.to_datetime(df_stamp.date)
+        # data_stamp = time_features(df_stamp, timeenc=self.timeenc, freq=self.freq)
+
+        border1, border2 = data_split[self.set_type]['start'], data_split[self.set_type]['end']
+        df_stamp = df_raw[['date']][border1:border2]
+        df_stamp['date'] = pd.to_datetime(df_stamp.date)
+        if self.timeenc == 0:
+            df_stamp['month'] = df_stamp.date.apply(lambda row: row.month, 1)
+            df_stamp['day'] = df_stamp.date.apply(lambda row: row.day, 1)
+            df_stamp['weekday'] = df_stamp.date.apply(lambda row: row.weekday(), 1)
+            df_stamp['hour'] = df_stamp.date.apply(lambda row: row.hour, 1)
+            data_stamp = df_stamp.drop(['date'], 1).values
+        elif self.timeenc == 1:
+            data_stamp = time_features(pd.to_datetime(df_stamp['date'].values), freq=self.freq)
+            data_stamp = data_stamp.transpose(1, 0)
+        else:
+            raise ValueError
+        self.data_stamp = data_stamp
+
+        self.data_x = data[border1:border2, :-1]
+        if self.inverse:
+            self.data_y = df_data.values[border1:border2, -1:]
+        else:
+            self.data_y = data[border1:border2, -1:]
+
+    def __getitem__(self, index):
+        if self.real_time:
+            if index+1 == self.__len__():
+                r_begin = len(self.data_x) - self.pred_len
+                r_end = len(self.data_x)
+            else:
+                r_begin = self.pred_start + index * self.pred_len
+                r_end = r_begin + self.pred_len
+            s_begin = r_begin - self.seq_len - self.lag
+            s_end = s_begin + self.seq_len
+        else:
+            s_begin, s_end = index, index + self.seq_len
+            r_begin, r_end = s_end + self.lag, s_end + self.pred_len + self.lag
+
+        prev_x = self.data_x[s_begin:s_end]
+        prev_y = self.data_y[s_begin:s_end]
+        prev_mark = self.data_stamp[s_begin:s_end]
+        # select y.
+        target_x = self.data_x[r_begin:r_end]
+        target_y = self.data_y[r_begin:r_end]
+        target_mark = self.data_stamp[r_begin:r_end]
+
+        # return DatasetItem(
+        #     prev_x=prev_x,
+        #     prev_y=prev_y,
+        #     prev_mark=prev_mark,
+        #     target_x=target_x,
+        #     target_y=target_y,
+        #     target_mark=target_mark,
+        # )
+        return {
+            "prev_x": prev_x,
+            "prev_y":  prev_y,
+            "prev_mark": prev_mark,
+            "target_x": target_x,
+            "target_y": target_y,
+            "target_mark": target_mark,
+        }
+

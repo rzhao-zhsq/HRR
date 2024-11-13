@@ -12,6 +12,8 @@ from models.layers.Transformer_EncDec import (
 )
 
 
+
+
 class Model(nn.Module):
     """
     Vanilla Transformer with O(L^2) complexity
@@ -39,7 +41,7 @@ class Model(nn.Module):
             )
         # Encoder
         self.encoder = Encoder(
-            attn_layers=[
+            [
                 EncoderLayer(
                     AttentionLayer(
                         FullAttention(
@@ -57,7 +59,7 @@ class Model(nn.Module):
         )
         # Decoder
         self.decoder = Decoder(
-            layers=[
+            [
                 DecoderLayer(
                     # self-attn
                     AttentionLayer(
@@ -80,21 +82,15 @@ class Model(nn.Module):
             ],
             norm_layer=torch.nn.LayerNorm(configs.d_model),
         )
-
-        if configs.conv_head:
-            from models.layers.Embed import ValueEmbedding
-            self.predict_head = ValueEmbedding(configs.d_model, configs.c_out)
-        else:
-            self.predict_head = nn.Linear(configs.d_model, configs.c_out, bias=True)
-
+        self.predict_head = nn.Linear(configs.d_model, configs.c_out, bias=True)
         self.loginfo = self._set_loginfo_(configs)
 
     def _set_loginfo_(self, cfg):
 
         return f"_s-{cfg.seq_len}_l-{cfg.label_len}_p-{cfg.pred_len}" \
-               f"_rgl-{cfg.encoder_regular}" \
-               f"_embed-{cfg.embed}{'-shared' if cfg.embed_shared else ''}" \
                f"-f-{cfg.freq}" \
+               f"_embed-{cfg.embed}{'-shrd' if cfg.embed_shared else ''}" \
+               f"{'_rgl' if cfg.encoder_regular else ''}" \
                f"_ec-{cfg.enc_in}_dc-{cfg.dec_in}_oc-{cfg.c_out}" \
                f"_el-{cfg.e_layers}_dl-{cfg.d_layers}_d-{cfg.d_model}_nh-{cfg.n_heads}_ff-{cfg.d_ff}" \
                f"_drop-{cfg.dropout}"
@@ -108,9 +104,16 @@ class Model(nn.Module):
 
     def forward(
             self,
-            prev_x, prev_y, prev_mark,
-            target_x, target_y, target_mark,
-            enc_self_mask=None, dec_self_mask=None, dec_enc_mask=None, **kwargs,
+            prev_x,
+            prev_y,
+            prev_mark,
+            target_x,
+            target_y,
+            target_mark,
+            enc_self_mask=None,
+            dec_self_mask=None,
+            dec_enc_mask=None,
+            **kwargs,
     ):
         # prepare decoder input
         # dec_inp = torch.zeros_like(target_y)
@@ -122,7 +125,7 @@ class Model(nn.Module):
         #     z = z.permute(0, 2, 1)
         #     z = self.revin_layer(z, 'norm')
         #     z = z.permute(0, 2, 1)
-        # prev_x = torch.cat([prev_x, prev_y], dim=-1)
+
         enc_embed = self.enc_embedding.forward(prev_x, prev_mark)
         enc_out_dict = self.encoder.forward(enc_embed, attn_mask=enc_self_mask)
         dec_embed = self.dec_embedding(target_x, target_mark)
@@ -138,7 +141,7 @@ class Model(nn.Module):
             "encoder_output": enc_out_dict['output'],
             "encoder_attns": enc_out_dict['attns'],
         }
-        if self.encoder_regular > 0:
-            enc_mse_loss = F.mse_loss(self.predict_head(enc_out_dict['output']), prev_y) * self.encoder_regular
+        if self.encoder_regular:
+            enc_mse_loss = F.mse_loss(self.predict_head(enc_out_dict['output']), prev_y)
             output_dict.update({"encoder_mse_loss": enc_mse_loss})
         return output_dict

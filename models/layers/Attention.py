@@ -19,17 +19,18 @@ class FullAttention(nn.Module):
         self.dropout = nn.Dropout(attention_dropout)
 
     def forward(self, queries, keys, values, attn_mask):
-        B, L, H, E = queries.shape
-        _, S, _, D = values.shape
-        scale = self.scale or 1. / sqrt(E)
+        B, L, H, D = queries.shape
+        _, S, _, _ = values.shape
+        scale = self.scale or 1. / sqrt(D)
 
         scores = torch.einsum("blhe,bshe->bhls", queries, keys)
 
         if self.mask_flag:
             if attn_mask is None:
                 attn_mask = TriangularCausalMask(B, L, device=queries.device)
-
-            scores.masked_fill_(attn_mask.mask, -np.inf)
+                scores.masked_fill_(attn_mask.mask, -np.inf)
+            else:
+                scores.masked_fill_(attn_mask, -np.inf)
 
         A = self.dropout(torch.softmax(scale * scores, dim=-1))
         V = torch.einsum("bhls,bshd->blhd", A, values)
